@@ -62,6 +62,67 @@ profiling build. For Vue, use `app.config.performance = true` together with the
 `renderTracked`/`renderTriggered` hooks. For Svelte or Solid, count effect runs in
 a wrapper.
 
+## Blocking vs background requests
+
+Fewer requests is not automatically better (see `field-lessons.md` A6). Split
+them at the moment the user can act. Place `performance.mark('journey:ready')`
+there, which is also the end of the truth window, then:
+
+```js
+const ready = performance.getEntriesByName('journey:ready').at(-1).startTime;
+const split = { blocking: 0, background: 0, blockingBytes: 0, backgroundBytes: 0 };
+for (const r of performance.getEntriesByType('resource')) {
+  const k = r.startTime < ready ? 'blocking' : 'background';
+  split[k]++;
+  split[`${k}Bytes`] += r.transferSize; // 0 for cross-origin without Timing-Allow-Origin
+}
+```
+
+- Call `performance.setResourceTimingBufferSize(1000)` early. The default buffer of 250 entries silently drops entries on busy pages.
+- "Started before ready" is an upper bound on blocking work. A request that starts early but doesn't gate the journey (analytics, prefetch) still competes for bandwidth and the main thread. The fix is to move it after the mark, not to stop counting it.
+- Ratchet `blocking` and `blockingBytes` tightly. Ratchet `background` loosely, and never lower it by removing revalidation or persistence calls without a redundancy proof.
+
+## Cached data, freshness, and durability
+
+Showing cached data before the network responds is one of the biggest
+perceived-speed wins. It is also where speed work most often breaks
+correctness. Every cache-first change needs these tests (`field-lessons.md` B1-B3).
+
+**Layout: two cases, not one.** A "zero layout shift" test alone pushes toward
+never reconciling with the server.
+
+1. *Cache matches server.* Seed the cache, serve identical data (`page.route(..., r => r.fulfill({ json: same }))`), and assert zero layout shift and zero DOM mutations in the cached region after the response.
+2. *Cache differs from server.* Serve one changed, added, and removed row. Assert that the final DOM equals the server data, and that shifts fall only in the rows that changed (`shiftsByRegion` with a `data-region` per row).
+
+**Freshness and durability.** Playwright's `expect` retries until its timeout, so
+these assert convergence, which is exactly what stale-while-revalidate promises.
+`createItem`, `deleteItem`, and `sendFirst` stand for app-specific helpers.
+
+```js
+test('a delete on another device reaches this one', async ({ browser }) => {
+  const ctx = () => browser.newContext({ storageState: 'auth.json' });
+  const a = await (await ctx()).newPage(), b = await (await ctx()).newPage();
+  await a.goto('/'); await b.goto('/');
+  const title = await createItem(b);
+  await a.reload(); await expect(a.getByText(title)).toBeVisible();
+  await deleteItem(b, title);
+  await a.reload();
+  await expect(a.getByText(title)).toHaveCount(0); // fails if the cache wins forever
+});
+
+test('an item created just before a refresh survives it', async ({ page }) => {
+  await page.goto('/');
+  const title = await sendFirst(page); // do not wait for the response
+  await page.reload();
+  await expect(page.getByText(title)).toBeVisible();
+});
+```
+
+Decide the durability contract before writing the second test. The contract is
+either "it persists" or "the user is told it didn't". Silent loss is never acceptable. Run
+both tests against cold, warm, and stale caches, and under `page.route` delays
+or `context.setOffline(true)`.
+
 ## Style recalcs and layouts via CDP
 
 The web platform does not expose the style-recalc count directly; read it through
@@ -97,6 +158,23 @@ Headless mode does not have the real browser UI. Prerendering, tab-strip
 resizes, and extensions do not happen there. When field layout-shift or frame
 data disagrees with the lab, simulate the field condition explicitly (for
 example, resize the viewport mid-load to mimic browser UI changes) and keep it as a test.
+
+## Field conditions the lab misses
+
+- **Prerendering.** Chrome can render a page before the user navigates (omnibox
+  or new-tab predictions), at a different viewport size. Detect it with
+  `document.prerendering` and the `prerenderingchange` event. Measure journeys from
+  `performance.getEntriesByType('navigation')[0].activationStart`, not from 0, or
+  prerendered loads will look instant. In the sprint, a prerender at the new-tab
+  page's height made the page grow 56 px after first paint. Lab test: load at one
+  viewport size, call `page.setViewportSize` after first paint, and assert no shift in
+  pinned regions.
+- **Rendering costs that CPU profiles miss.** Open the DevTools Rendering panel and
+  turn on paint flashing, layout shift regions, layer borders, and frame rendering
+  stats. For GPU and compositor time, record a trace with the `gpu` and `viz`
+  categories in Perfetto or `chrome://tracing`.
+- **Real devices.** Test 120 Hz displays, low-end Android, and throttled CPU (CDP
+  `Emulation.setCPUThrottlingRate`). The developer's laptop is the best case.
 
 ## Gating
 

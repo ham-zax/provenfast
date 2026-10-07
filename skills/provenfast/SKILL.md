@@ -25,6 +25,7 @@ Do this once per task. It decides which tools and which section of the reference
 3. **Missing tools.** **Ask the user before installing anything.** Give the exact command for their OS (`references/tools-by-os.md`). Never run `sudo` or elevated installs yourself; ask the user to run them (in Claude Code: `! sudo apt-get install -y valgrind`). If they decline, fall back to the next metric on the ladder and say what precision you lost.
 4. **Repo conventions win.** Look for existing bench, profile, and trace tooling first (`bench`, `perf`, `profile`, `benchmark` scripts, tracing env flags, CI perf jobs) and reuse it. Repo instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) override this skill on run counts, memory caps, commit rules, and test commands.
 5. **Stack.** Open the matching section of `references/stacks.md` (web/browser, Node, Python, Go, Rust, JVM, .NET, native, mobile, databases/backends, CI/builds, agent/LLM workflows).
+6. **Drive the app.** Confirm you can script the journey and read its counters and traces (a CLI command, a bench script, or Playwright/CDP for a browser). How well an agent can drive the app limits deep performance work more than anything else. If you can't, set it up first (ask before installing).
 
 | Verb in this skill | Claude Code | Codex / OpenCode / Gemini CLI / Aider | Cursor / Windsurf / IDE agents | Chat only (no shell) |
 |---|---|---|---|---|
@@ -39,11 +40,11 @@ Do this once per task. It decides which tools and which section of the reference
 Run one loop per **journey**: a user-visible flow with a start and an end, such as "cold launch to typeable", "open conversation", "send to first token", "search request p50", "`index` on repo X", or "CI job wall time".
 
 1. **Open the thread.** Name the journey, the user-visible endpoint, the current number, and an owner. Keep it narrow: one journey or benchmark per thread.
-2. **Build the benchmark.** Trace the real flow end to end. Reproduce it in a lab harness with fixed inputs and fixed data size. Record a baseline (section 3).
+2. **Build the benchmark.** Trace the real flow end to end. Reproduce it in a lab harness with fixed inputs at a typical size *and* a worst-case size taken from real shapes (the longest real conversation, the biggest repo). Toy fixtures hide superlinear work. Record a baseline (section 3).
 3. **Find the dominant cost.** Profile; don't guess. Rank costs, and attack the biggest one the profile shows (section 4).
 4. **Ship small changes, sized for risk.** Add tests or an equivalence check *before* optimizing. Put anything user-perceptible behind a flag (section 5).
 5. **Watch the deploy.** Compare the lab metric and the field metric (RUM, logs, traces) before and after. Confirm the field moved, not just the lab.
-6. **Lock it in.** Lower the ratchet ceiling (`scripts/ratchet.mjs update`) so the win cannot silently regress.
+6. **Lock it in.** Lower the ratchet ceiling (`scripts/ratchet.mjs update`) so the win cannot silently regress. Run `update` on the main branch after merges or nightly; an unratcheted win is headroom for the next regression.
 7. **Next.** Do not close the thread when the first target is hit. Look for the next cost *within the same journey*. Close it only at diminishing returns (section 7).
 
 ## 2. The metric ladder
@@ -60,19 +61,24 @@ Rules:
 
 - **Validate every gate proxy against truth** before trusting it. Make one real optimization and measure both the proxy and the wall clock. They must move in the same direction with a plausible ratio. In the sprint, cutting instructions by 48% cut wall clock by 78% on one hot path, and 31% fewer instructions gave 44% less wall clock on another. If the proxy moves and the wall clock does not, the proxy is measuring the wrong work. Pick another proxy.
 - **Measure the noise of the gate.** Run it twice on unchanged code. Deterministic counts should agree within 0.1%; instruction counts under Valgrind with `node --predictable` typically agree within 0.001%. Set the ratchet tolerance just above the observed noise.
-- **Subtract fixed startup cost.** A process-level count includes runtime boot. For example, an empty `node` process costs about 93M instructions, which can hide a 40% workload win as a 3% total change. Either measure a no-op baseline and subtract it, or measure in-process around the journey.
+- **Subtract fixed startup cost.** A process-level count includes runtime boot. For example, an empty `node` process costs about 96M instructions, which can hide a 40% workload win as a 3% total change. Either measure a no-op baseline and subtract it, or measure in-process around the journey.
 - **Count calls to explain instructions.** `scripts/call-counts.mjs` showed a resolver called 59,999 times instead of 20,000: the "resolve each ID once, not three times" fix is visible directly.
+- **Pair every gate with a counter-check.** A count rewards deleting work, including the work that keeps the app correct: revalidation, cache invalidation, persistence, retries, syncing. Before removing a request, write, or render, prove it is redundant (a named invariant already guarantees its result). Add a check that fails if it wasn't: freshness after a change made elsewhere, durability across a refresh mid-action, convergence to server truth. Fewer requests with stale data on screen is a regression, not a win.
+- **Count the critical path separately.** Split each count at the journey's end mark into *blocking* (before) and *background* (after). Optimize blocking work first, usually by reordering: fetch what the first interaction needs first, then keep data fresh in the background. Background work still costs battery, data, and server load, but remove it only with the redundancy proof above.
+- **Ratchet absolute counts per journey, never global ratios.** Coverage percentages and averages can block deleting dead code. Deleting code should only ever lower a count.
 - **Several cheap counters beat one perfect one.** Each new instrument tends to expose new targets. In the sprint, about a third of the PRs added telemetry or a guardrail.
 
 ## 3. Measurement protocol
 
 ### Wall clock (truth)
 
+- **Audit the window first.** Start at the user's action (the input event's timestamp or navigation start), not at component mount or request start. End when the user can use the result. Separate client time from server time. Check the instrumented number once against a screen recording: a dashboard that starts the clock late will "prove" a slow journey is fast.
 - Use `hyperfine --warmup 3 --runs 10 '<cmd>'`, or the stack-native harness (pyperf, `go test -bench` plus benchstat, criterion, JMH, BenchmarkDotNet).
 - Report **median of at least 3 runs** (more if the repo asks), the spread (IQR or min/max), and **peak memory** (`/usr/bin/time -v` on Linux, `/usr/bin/time -l` on macOS, `Measure-Command` plus process stats on Windows).
 - Record machine load (`uptime` or `doctor.sh`), core count, power mode, and whether the cache was warm or cold. Compare before and after only on the same machine, input, and load.
 - For cold-start journeys, state how you made the start cold: dropped OS caches, a fresh profile, or a cleared app cache.
 - For p95/p99, collect enough samples (at least 100) and report the distribution, not one number.
+- Always give absolute times next to percentages. "−78%" is very different at 60 ms and at 4 s.
 
 ### Deterministic counts (gate)
 
@@ -86,7 +92,7 @@ Write every gate into a single flat `metrics.json` (`{"journey.metric": number}`
 
 ### Frame budget (smoothness)
 
-For streaming, scrolling, and animation, use the frame budget: 16.67 ms per frame at 60 Hz and 8.33 ms at 120 Hz. Add an FPS readout computed from `requestAnimationFrame` timestamps. In CI, drive headless Chromium with deterministic frame stepping (CDP `HeadlessExperimental.beginFrame`) and step through the worst case frame by frame. Gate on **total main-thread blocking time** and **worst single frame**, not average FPS.
+For streaming, scrolling, and animation, use the frame budget: 16.67 ms per frame at 60 Hz and 8.33 ms at 120 Hz. Add an FPS readout computed from `requestAnimationFrame` timestamps. In CI, drive headless Chromium with deterministic frame stepping (CDP `HeadlessExperimental.beginFrame`) and step through the worst case frame by frame. Gate on **total main-thread blocking time** and **worst single frame**, not average FPS. In the sprint, stepping a long streamed reply frame by frame cut its main-thread blocking from over 750 ms to 200 ms and its CPU to a third, and it held 120 FPS. The method: remove work that grows with message length on each chunk, memoize finished blocks, and move growing-code-fence tokenization to a worker. The 120 Hz rig then became a nightly job.
 
 ## 4. Hunting: where the time actually goes
 
@@ -96,7 +102,10 @@ Run a **census** before you guess. Each census below found a large, invisible co
 - **Selector/rule audit:** a single expensive CSS selector (`:root:has(...)`) added 24 ms to every DOM change. The same applies to regex tables, middleware chains, and validation rules.
 - **Code path tracing:** a forgotten `location.reload()` caused about 500k hidden reloads a day. Grep for reloads, retries, polling, and duplicate fetches.
 - **Idle profiling:** profile while the user does nothing. One idle tab cloned cache snapshots into IndexedDB twice a minute on the main thread.
-- **Encoding and representation:** one non-ASCII character can turn a whole string into two-byte UTF-16 and push every regex onto a slower path. Copying code blocks to a one-byte string before highlighting cut a 1.0 s freeze to 0.35 s.
+- **Data-flow census:** count fetches, cache reads and writes, and renders per journey. Repeated work, such as the same ID resolved three times, often traces back to one data-loading pattern that also triggers extra renders.
+- **Encoding and representation:** one non-ASCII character (an em dash, a curly quote) can turn a whole string into two-byte UTF-16 and push every regex onto a slower path. Copying code blocks to a one-byte string before highlighting cut a 1.0 s freeze to 0.35 s.
+- **Re-check against the budget after a micro-fix.** 0.35 s is still about 40 frames at 120 Hz. If the work is still over budget, ask whether it belongs on that thread at all. A worker or WASM module, lazy-loaded, takes it off the main thread entirely. Count the costs: bundle size, message passing, ordering, and cancellation.
+- **Style, paint, and GPU:** CPU profiles miss these costs. Count style recalcs and layouts via CDP, and use the DevTools Rendering panel (paint flashing, layout-shift regions, layer borders).
 
 ### Pattern catalogue
 
@@ -105,55 +114,84 @@ Each fix below gives the same output with less work. Prove that with an equivale
 | Smell | Fix |
 |---|---|
 | Same lookup repeated per item | resolve once and pass it down; hoist out of loops |
+| Plain objects used as dictionaries over many shapes (megamorphic lookups) | `Map`, or a stable shape; resolve once |
 | Expensive regex/parse on every line | cheap first-character or length prefilter, then the full check |
 | O(total length) work per streamed chunk | memoize finished blocks; only process the growing tail |
 | Heavy work on the UI/main/request thread | move it to a worker, thread pool, or background job; keep a fallback |
 | Big layout/paint in one frame | split it across frames (cell by cell, row by row) to fit the budget |
 | Interactive UI waits for framework boot | ship a static shell rendered from the same component, then hydrate over it; test the handoff |
 | Recompiling the same code every start | bytecode or code cache, snapshot, AOT, persistent compile cache |
-| Navigation waits on fetch | prefetch on intent (hover, focus, viewport), with cancellation |
+| Navigation waits on fetch | prefetch on intent (hover, focus, viewport), with cancellation and a concurrency cap |
+| Persistent UI remounts on navigation | keep it mounted across routes (composer, sidebar) |
+| Page waits on the network for data it showed last time | render the cached copy immediately (provisional if needed), then revalidate and reconcile; never skip the revalidation |
 | Constant per-session work repeated per request | cache it behind a witness (hash, stat signature, frozen value identity); fall back when unsure |
 | N+1 queries or round trips | batch, join, or preload; gate on query count |
 | Re-render storms | narrow subscriptions, stable props, selector memoization; gate on commit count |
-| Late content moving the layout | reserve space, pin layout, and gate on layout shifts per region |
+| Late content moving the layout | reserve space, pin layout, gate on layout shifts per region; allow movement only where reconciliation changed the data |
 
 ## 5. Guardrails: what makes bold changes safe
 
 - **Tests come first.** Before any optimization, the behavior must be covered. If it is not, add the test, watch it pass on the old code, then optimize.
 - **Equivalence, not just speed.** Changes that claim "same output, faster" need a differential test of new vs old over fixtures that hit every branch the new code takes. A fast path returns "unsure" and falls back unless it is provably correct. Mutation-check the test: break the cache key or witness, confirm the test fails, then restore it.
-- **Hand-offs get their own tests.** Static-to-live UI swaps need layout comparisons across several viewport sizes (the sprint used 14 viewports with ±1 px tolerance) plus keystroke-ordering tests. Worker offloads need ordering and cancellation tests. Caches need invalidation tests.
-- **Flags for anything user-perceptible.** Roll out to the team, then to 1% of users, then to everyone. Track flags in one list and retire them: the sprint created about 200 and retired more than half before it ended.
+- **Hand-offs get their own tests.**
+  - Generate the fast copy from the source of truth, never by hand. The sprint rendered the real component in JSDOM to produce the static markup.
+  - Static-to-live UI swaps need layout comparisons across several viewport sizes (the sprint used 14 viewports with ±1 px tolerance), plus keystroke-ordering tests.
+  - Worker offloads need ordering and cancellation tests.
+  - Caches need invalidation tests.
+  - In the field, report any movement at the seam and investigate anything non-zero.
+- **Adversarial scenarios.** Users rarely report these failures, and speed metrics never show them. Test them on purpose for any change to caching, fetching, persistence, or navigation:
+  - change or delete something in a second tab or device, then reload;
+  - refresh or navigate away mid-action (right after send);
+  - cold, warm, and stale caches;
+  - slow and offline networks;
+  - the worst-case fixture.
+- **Make human testing one step.** Provide a preview URL per PR, or a PR label that builds the desktop artifact. If trying a change takes 20 minutes, nobody feels it before users do. The owner should use the change before rollout.
+- **Auto-merge only what gates cover.** Visual, animation, and interaction changes need a human to look at a before/after recording, because no count covers them.
+- **Flags for anything user-perceptible.** Roll out to the team, then to 1% of users, then to everyone. Classify each flag as a *kill switch* or a *ramp*, give it an owner and a removal date, keep all flags in one list, and retire them. The sprint created about 200 and retired more than half before it ended.
 - **Review.** Every change gets automated review plus at least one human approval when the project has humans in the loop. Show user-visible changes as before/after recordings.
-- **Ratchet everything you won.** `scripts/ratchet.mjs check` runs in CI or nightly. `update` only ever lowers ceilings. Raising a ceiling must be a reviewed edit with a stated reason.
-- **Headless isn't the user's machine.** Headless browsers lack real browser UI, prerendering, extensions, and GPUs. When field data disagrees with the lab, reproduce the field condition in the lab and add it as a test.
+- **Lab checks vs committed tests.** Generate as many throwaway checks as help you prove a change. Commit only the ones that guard a real invariant, within the repo's test budget.
+- **Ratchet everything you won.**
+  - `scripts/ratchet.mjs check` runs in CI or nightly.
+  - Post the result where agents and reviewers read it: `--markdown "$GITHUB_STEP_SUMMARY"`, or a file posted as a PR comment. The coding agent and the review agent then catch regressions before a human has to.
+  - `update` only ever lowers ceilings. Raising a ceiling must be a reviewed edit with a stated reason.
+- **Headless isn't the user's machine.** Headless browsers lack real browser UI, prerendering, extensions, and GPUs. A page can be rendered at one viewport size and shown at another: Chrome prerendered claude.ai at the new-tab page's height, and the page grew 56 px after first paint. When field data disagrees with the lab, reproduce the field condition in the lab and add it as a test.
 
 ## 6. Scaling: many narrow threads, not one wide one
 
 - Run one journey or benchmark per thread or worker, and scale by opening more threads. The sprint ran 150+ in parallel.
-- Each thread has a named owner who supplies **taste**: which trade-offs are acceptable, such as skeleton timing or animation cost against the frame budget.
-- A coordinator supplies **direction**: sequencing, deduplication, closing threads at diminishing returns, and shared-file conflicts.
-- Supply **ambition**: treat targets as starting points. Ask "what would make this 10x?" before settling for 10%.
+- Each thread has a named owner who supplies **taste**: which trade-offs are acceptable. The agent's job is to measure each option's cost (for example, a word-by-word fade's share of the frame budget) and build two or three variants. The owner chooses. Use data where it exists: pick a skeleton delay from the measured load-time distribution so the skeleton never flashes for a frame or two. Holding content back until it is complete makes rendering cheaper but delays the first thing users see, so that is a taste call, not a rule.
+- A coordinator supplies **direction**: sequencing, deduplication, merging threads that step on each other, and closing threads at diminishing returns.
+- Supply **ambition**: agents default to small scope.
+  - Treat targets as starting points: "the targets are not the stopping point; what's next?"
+  - When wins plateau, propose three options, from incremental to radical (a cache layer, a worker or process boundary, a new data model, a different runtime). Give each an estimated time saved, its complexity, and the benchmark that would prove it. Implement the one the owner picks.
+- **Estimate impact in milliseconds, not effort in days.** Agents estimate effort in human working days and overshoot badly. Within the authorized scope, do the work now instead of scheduling it.
 - On a single machine, keep heavy measurements serial. Parallel benchmarks corrupt each other's wall clock. Deterministic counts are safer to parallelize.
 
 ## 7. When to stop
 
+Rank work by **absolute time saved × how often the journey runs** (user-hours), not by percentage.
+
 Stop a thread when either is true:
 
 - the next win is below the measurement noise or below what users can perceive, or
-- the complexity cost is greater than the gain. In one sprint decision, saving 2 ms per send did not justify maintaining a custom build plugin.
+- the complexity cost is greater than the gain. In one sprint decision, saving 2 ms per send did not justify maintaining a 900-line custom build plugin. New infrastructure needs a perceptible win.
 
 Open the remaining journeys as new threads (p95 tails, very large inputs, rarely-run flows) instead of stretching the current one.
 
 ## 8. Report format
 
+Lead with the result, and put the command log at the end.
+
 ```
 Journey: <name> (<platform>, <input/fixture>, cold|warm)
 Truth:   <before median> -> <after median>  (<x>x, n=<runs>, spread <IQR>, peak RSS <a> -> <b>)
+Impact:  <ms saved> x <journey frequency> ; blocking vs background split if relevant
 Gates:   instructions <a> -> <b> (<-%>), calls <a> -> <b>, <other counts>
 Proxy validated: <yes: proxy -% vs wall -%> | <no: why>
 Cause:   <dominant cost from profile, file:line>
 Change:  <what changed>; flag <name> | none
 Safety:  <equivalence/differential test>, <mutation check result>
+Counter: <freshness / durability / scenario checks that prove nothing necessary was removed>
 Ratchet: <baseline file> lowered: <metric> <old> -> <new>
 Command: <exact commands used> ; machine <cores, load>
 ```
@@ -165,7 +203,8 @@ When summarizing several journeys, use the geometric mean of the speedups, not t
 - `scripts/doctor.sh`, `scripts/doctor.ps1`: detect OS, stack, and tools, and print install commands. They never install.
 - `scripts/instr-count.sh`: instruction counts (valgrind | perf | macOS backends).
 - `scripts/call-counts.mjs`: deterministic JS function call counts via V8 precise coverage.
-- `scripts/ratchet.mjs`: `check` / `update` ceilings that only go down.
+- `scripts/ratchet.mjs`: `check` / `update` ceilings that only go down; `--markdown FILE` for CI summaries and PR comments.
 - `references/tools-by-os.md`: tool matrix and install commands for Linux, macOS, Windows, and WSL.
 - `references/stacks.md`: recipes per stack and workflow (truth, gate, and explain tools for each).
-- `references/browser.md`: in-page counters (commits, style recalcs, DOM mutations, layout shifts, frame meter) and CDP frame stepping.
+- `references/browser.md`: in-page counters (commits, style recalcs, DOM mutations, layout shifts, blocking vs background requests, frame meter), cache and freshness tests, and CDP frame stepping.
+- `references/field-lessons.md`: each claim in the sprint write-up, the main public critique of it, and a verdict on what holds up. Read it before any web or desktop UI work, or when a gate is about to delete work.

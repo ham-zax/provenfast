@@ -7,9 +7,19 @@ project's existing harness first if it has one.
 ## Web / browser apps (React, Vue, Svelte, Angular, plain DOM)
 
 - **Truth:** Navigation and Resource Timing, `performance.mark/measure` around the journey, Web Vitals (LCP, INP, CLS), real user monitoring split by platform and product. Lab runs with Playwright or Puppeteer, repeated 10+ times and reported as the median.
-- **Gate:** render commits per interaction, style recalcs, layouts, DOM mutations, layout shifts by region, long animation frames, network requests and bytes, JS heap. See `browser.md` for the snippets. CDP `Performance.getMetrics` returns `RecalcStyleCount`, `LayoutCount`, `Nodes`, `JSEventListeners`, `ScriptDuration`, and `TaskDuration`.
+- **Gate:** render commits per interaction, style recalcs, layouts, DOM mutations, layout shifts by region, long animation frames, network requests and bytes split into blocking and background, JS heap. Measure payload bytes on a typical and a worst-case fixture. See `browser.md` for the snippets. CDP `Performance.getMetrics` returns `RecalcStyleCount`, `LayoutCount`, `Nodes`, `JSEventListeners`, `ScriptDuration`, and `TaskDuration`.
 - **Explain:** DevTools Performance panel, React Profiler, `chrome://tracing`, coverage of unused JS and CSS.
-- **Typical wins:** a static shell before hydration, prefetch on hover, code splitting, narrower subscriptions, memoized finished content, work in Web Workers, cheaper selectors, reserved layout space.
+- **Typical wins:**
+  - a static shell before hydration, generated from the real component;
+  - prefetch on hover, with cancellation;
+  - cached data rendered at once and then revalidated;
+  - persistent UI kept mounted across routes;
+  - code splitting and narrower subscriptions;
+  - memoized finished content;
+  - heavy parsing or highlighting in a lazy-loaded Web Worker or WASM module;
+  - `Map` instead of objects used as dictionaries;
+  - cheaper selectors and reserved layout space.
+- **Counter-checks:** freshness across tabs and devices, durability across a refresh mid-action, and layout convergence when the cache is stale (`browser.md`).
 
 ## Electron / desktop shells
 
