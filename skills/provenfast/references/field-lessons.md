@@ -2,8 +2,8 @@
 
 Two sources:
 
-- **The sprint.** Anthropic's write-up of the claude.ai speed sprint (<https://claude.dev/blog/how-we-made-claude-ai-faster/>).
-- **The critique.** Theo Browne's video review of the write-up. He tested claude.ai live and compared it with his own apps (T3 Chat, T3 Code).
+- **The sprint.** Anthropic's write-up of the claude.ai speed sprint (<https://claude.dev/blog/how-we-made-claude-ai-faster/#an-8-millisecond-budget>).
+- **The critique.** Theo Browne's video review of the write-up (<https://www.youtube.com/watch?v=FsDUOUV9Vs8&t=3289s>). He tested claude.ai live and compared it with his own apps (T3 Chat, T3 Code).
 
 Theo had no access to the code. Where he guesses at a cause, this file says so. The verdicts are ProvenFast's judgment, not his, and not Anthropic's:
 

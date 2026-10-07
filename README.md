@@ -129,9 +129,11 @@ skills/provenfast/scripts/instr-count.sh -- node --predictable examples/resolve-
 ## Credits
 
 The method is distilled from Anthropic's write-up,
-[How we made claude.ai faster](https://claude.dev/blog/how-we-made-claude-ai-faster/).
-Theo Browne's video review of that write-up shaped the counter-checks, the
-blocking vs background split, and the freshness tests. ProvenFast tests his
-claims instead of taking them on trust: `references/field-lessons.md` records
-which ones it adopts, limits, or rejects, and why.
+[How we made claude.ai faster](https://claude.dev/blog/how-we-made-claude-ai-faster/#an-8-millisecond-budget).
+[Theo Browne's video review](https://www.youtube.com/watch?v=FsDUOUV9Vs8&t=3289s) of that write-up shaped the counter-checks,
+the blocking vs background split, and the freshness tests. A transcript of the
+video is in [`artifacts/theo's_rant.md`](artifacts/theo's_rant.md). ProvenFast
+tests his claims instead of taking them on trust:
+`skills/provenfast/references/field-lessons.md` records which ones it adopts,
+limits, or rejects, and why.
 ProvenFast is an independent project and is not affiliated with Anthropic.
