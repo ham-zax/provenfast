@@ -5,13 +5,13 @@
 ProvenFast is an agent skill that makes your app, service, CLI, build, or agent
 workflow faster, and proves it. It turns "make it faster" into a loop:
 
-1. Measure the slow interaction users hit most.
+1. Briefly triage the main interactions and measure the largest worthwhile bottleneck.
 2. Find the dominant cost.
-3. Ship small changes and check what they could break.
-4. Stop when the target is met.
+3. Make worthwhile changes and check what they could break.
+4. Verify the gain and finish when the target is met.
 
-Deterministic gates and ratchets that can only go down are there when you ask
-for them.
+A new regression gate is added only when a regression has already recurred or
+you ask for one.
 
 It works in Claude Code, Codex, OpenCode, Gemini CLI, Cursor, or a plain chat,
 on Linux, macOS, Windows, and WSL.
@@ -23,8 +23,9 @@ generalizes that method to any stack.
 
 ## Why it works
 
-Wall clock is what users feel, but it is too noisy to iterate against or to gate
-CI on. ProvenFast splits metrics into three tiers:
+Wall clock is what users feel. A lean pass starts with before/after timings and
+a targeted trace or profile. When timing noise makes experiments hard to compare,
+a validated counter can be cheaper and more reliable. ProvenFast offers three tiers:
 
 | Tier | Job | Examples |
 |---|---|---|
@@ -32,17 +33,17 @@ CI on. ProvenFast splits metrics into three tiers:
 | **Gate** | what you iterate and ratchet on | instruction counts, call counts, renders, style recalcs, DOM mutations, allocations, queries, requests, tokens |
 | **Explain** | why a number moved | CPU profiles, call trees, query logs, frame-by-frame traces |
 
-Gate metrics are deterministic for a fixed input, so an agent can try many
-changes quickly, and CI can catch a 1% regression that wall clock would never
-show. Each gate is first **validated** against wall clock so you never optimize
-a number users can't feel.
+Stable counters can make experiments faster and catch small regressions in CI.
+Each proxy is **validated** against wall clock and rechecked when the workload or
+optimization mechanism changes. Using a counter does not require building CI
+tooling.
 
 Counts can be gamed. The cheapest way to lower a request or render count is to
 delete the work that keeps the app correct: revalidation, cache invalidation,
 persistence. So ProvenFast pairs every gate with a **counter-check**, such as
 freshness across tabs, durability across a refresh, or convergence to server
-truth. It also splits counts at the moment the screen is ready, and proves
-which early work actually blocks the user by delaying it.
+truth. It also splits counts at the moment the screen is ready and uses traces
+or targeted experiments to identify which early work actually blocks the user.
 
 In the [worked example](docs/worked-example.md), the same change measured on the
 same machine gave:
@@ -85,14 +86,14 @@ Ask your agent something like:
 By default the agent does a **lean pass**: the most improvement for the least
 effort and maintenance.
 
-1. It picks the slow interaction users hit most and times it.
-2. It profiles that interaction and fixes the dominant cost with the tools you already have.
+1. It starts with the interaction you named, or briefly triages startup, navigation, and the main interaction before choosing the largest worthwhile bottleneck.
+2. It measures and profiles that interaction, then fixes the dominant cost. A bounded larger change can be worthwhile when it removes the main problem.
 3. It checks what the change could break: tests, and freshness and persistence when caching or saving is involved.
-4. It stops when your target is met and lists what is left, with an estimated gain for each.
+4. It reports measured before/after performance and finishes when your target is met, or, if you gave none, the provisional target it states up front. It reports significant remaining issues already observed, with uncertainty.
 
-Deterministic gates, CI ratchets, frame stepping, and parallel threads are
-**deep mode**, and run only when you ask: "set up a perf gate", "run a full
-performance sprint on these journeys".
+Existing tools and inexpensive counters support a lean pass. Extended sprints, specialized benchmark rigs,
+runtime replacements, and ongoing monitoring are **deep mode** and need an
+explicit request. Asking for one gate authorizes that gate, not a full sprint.
 
 In deep mode, agents tend to settle for small wins and to quote effort in human
 working days. These prompts help:
@@ -120,9 +121,9 @@ skills/provenfast/
     └── ratchet.mjs          check / update ceilings that only go down; --markdown for CI and PR summaries
 ```
 
-Requirements: `bash` for the shell scripts, Node 18+ for the `.mjs` scripts, and
-whatever `doctor.sh` recommends for your platform (usually `hyperfine`, plus
-`valgrind` on Linux/WSL).
+Optional bundled tools require `bash` for the shell scripts and Node 18+ for the
+`.mjs` scripts. Start with the project's existing tools; `doctor.sh` lists
+additional options such as `hyperfine` and Linux/WSL `valgrind` when needed.
 
 ## Try it in 30 seconds
 

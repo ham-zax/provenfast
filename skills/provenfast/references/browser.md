@@ -5,6 +5,11 @@ times, and read `window.__perf` afterwards. It works from DevTools, Playwright
 (`page.addInitScript` / `page.evaluate`), Puppeteer, or any browser tool your
 harness has.
 
+Use only the counters needed to explain the observed problem. A lean pass can
+start with existing timings and a rendering trace; this meter and the frame
+stepping recipe are optional tools. CI integration and dedicated rigs must earn
+their setup and maintenance cost under `SKILL.md`'s scope rules.
+
 ## In-page meter
 
 ```js
@@ -80,17 +85,20 @@ for (const r of performance.getEntriesByType('resource')) {
 
 - Call `performance.setResourceTimingBufferSize(1000)` early. The default buffer of 250 entries silently drops entries on busy pages.
 - "Started before ready" is an upper bound on blocking work. A request that starts early but doesn't gate the journey (analytics, prefetch) still competes for bandwidth and the main thread. The fix is to move it after the mark, not to stop counting it.
-- To prove a request is *blocking*, delay it and see whether ready moves. If the ready time grows by about the delay, the request is on the critical path; if it barely moves, it is not.
+- When the trace leaves a dependency unclear, delay a request and see whether ready moves. A sufficiently long hold can put an otherwise overlapping request on the critical path, so compare its normal completion time with the trace and try smaller delays before attributing the original latency to it.
 
   ```js
-  // Playwright: hold one endpoint for 1 s, then compare journey:ready with and without the hold.
+  // Playwright: hold one endpoint, then compare journey:ready between HOLD_MS=0 and, say, 1000.
+  // Any route disables Playwright's HTTP cache, so register it in the baseline run too;
+  // otherwise the comparison also measures the lost cache.
+  const holdMs = Number(process.env.HOLD_MS ?? 0);
   await page.route('**/api/models**', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
     await route.continue();
   });
   ```
 
-- Ratchet `beforeReady` and `beforeReadyBytes` tightly. Ratchet `afterReady` loosely, and never lower it by removing revalidation or persistence calls without a redundancy proof.
+- If a request-count gate is useful, choose ceilings from observed noise and the intended behavior. Before-ready counts include non-blocking work, so reductions need latency validation. Never lower either count by removing revalidation or persistence calls without a redundancy proof.
 
 ## Cached data, freshness, and durability
 
@@ -161,7 +169,7 @@ do not depend on machine speed:
 
 1. Launch with `--deterministic-mode` (or `--enable-begin-frame-control --run-all-compositor-stages-before-draw`) in headless mode.
 2. For each frame, call CDP `HeadlessExperimental.beginFrame({ frameTimeTicks, interval: 8.333 })` for 120 Hz, or 16.667 for 60 Hz, advancing `frameTimeTicks` by the interval.
-   Verify the rig before trusting it: keep a `requestAnimationFrame` loop running in the page and check that N `beginFrame` calls produce exactly N callbacks. The sprint's rig produced 240 frames from 240 begin frames at 8.33 ms. Headless Chromium ticks at 60 Hz by default, so confirm the rate you asked for is the rate you got.
+   Verify the rig before trusting it: keep a `requestAnimationFrame` loop running in the page and check that N `beginFrame` calls produce exactly N callbacks. The sprint's rig produced 240 frames from 240 begin frames at 8.33 ms. This validates virtual cadence, not real presentation smoothness or GPU throughput; validate the improvement on a representative device too.
 3. Around each frame, read the main-thread task time (tracing or `Performance.getMetrics` `TaskDuration` delta). Flag frames whose work exceeds the budget.
 4. Gate on **total main-thread blocking** and the **worst frame** over a long fixture, such as a long streamed reply or a big table render.
 

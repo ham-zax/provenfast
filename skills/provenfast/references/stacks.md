@@ -4,6 +4,11 @@ Each section lists three kinds of tool: **Truth** (wall clock), **Gate**
 (deterministic counts for the ratchet), and **Explain** (profilers). Use the
 project's existing harness first if it has one.
 
+These are options, not a setup checklist. Follow `SKILL.md`'s lean default:
+choose the cheapest measurement that supports the next decision, reuse existing
+tools, and add gates only when their protection justifies their cost. The run
+counts and advanced harnesses below apply when that precision is needed.
+
 ## Web / browser apps (React, Vue, Svelte, Angular, plain DOM)
 
 - **Truth:** Navigation and Resource Timing, `performance.mark/measure` around the journey, Web Vitals (LCP, INP, CLS), real user monitoring split by platform and product. Lab runs with Playwright or Puppeteer, repeated 10+ times and reported as the median.
