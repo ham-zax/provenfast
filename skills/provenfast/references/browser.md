@@ -62,7 +62,7 @@ profiling build. For Vue, use `app.config.performance = true` together with the
 `renderTracked`/`renderTriggered` hooks. For Svelte or Solid, count effect runs in
 a wrapper.
 
-## Blocking vs background requests
+## Requests before and after ready
 
 Fewer requests is not automatically better (see `field-lessons.md` A6). Split
 them at the moment the user can act. Place `performance.mark('journey:ready')`
@@ -70,9 +70,9 @@ there, which is also the end of the truth window, then:
 
 ```js
 const ready = performance.getEntriesByName('journey:ready').at(-1).startTime;
-const split = { blocking: 0, background: 0, blockingBytes: 0, backgroundBytes: 0 };
+const split = { beforeReady: 0, afterReady: 0, beforeReadyBytes: 0, afterReadyBytes: 0 };
 for (const r of performance.getEntriesByType('resource')) {
-  const k = r.startTime < ready ? 'blocking' : 'background';
+  const k = r.startTime < ready ? 'beforeReady' : 'afterReady';
   split[k]++;
   split[`${k}Bytes`] += r.transferSize; // 0 for cross-origin without Timing-Allow-Origin
 }
@@ -80,7 +80,17 @@ for (const r of performance.getEntriesByType('resource')) {
 
 - Call `performance.setResourceTimingBufferSize(1000)` early. The default buffer of 250 entries silently drops entries on busy pages.
 - "Started before ready" is an upper bound on blocking work. A request that starts early but doesn't gate the journey (analytics, prefetch) still competes for bandwidth and the main thread. The fix is to move it after the mark, not to stop counting it.
-- Ratchet `blocking` and `blockingBytes` tightly. Ratchet `background` loosely, and never lower it by removing revalidation or persistence calls without a redundancy proof.
+- To prove a request is *blocking*, delay it and see whether ready moves. If the ready time grows by about the delay, the request is on the critical path; if it barely moves, it is not.
+
+  ```js
+  // Playwright: hold one endpoint for 1 s, then compare journey:ready with and without the hold.
+  await page.route('**/api/models**', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await route.continue();
+  });
+  ```
+
+- Ratchet `beforeReady` and `beforeReadyBytes` tightly. Ratchet `afterReady` loosely, and never lower it by removing revalidation or persistence calls without a redundancy proof.
 
 ## Cached data, freshness, and durability
 

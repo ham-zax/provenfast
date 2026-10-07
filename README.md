@@ -5,17 +5,20 @@
 ProvenFast is an agent skill that makes your app, service, CLI, build, or agent
 workflow faster, and proves it. It turns "make it faster" into a loop:
 
-1. Measure the journey.
+1. Measure the slow interaction users hit most.
 2. Find the dominant cost.
-3. Ship small changes with equivalence checks.
-4. Lock each win behind a ratchet that can only go down.
+3. Ship small changes and check what they could break.
+4. Stop when the target is met.
+
+Deterministic gates and ratchets that can only go down are there when you ask
+for them.
 
 It works in Claude Code, Codex, OpenCode, Gemini CLI, Cursor, or a plain chat,
 on Linux, macOS, Windows, and WSL.
 
 It is built on the method behind Anthropic's
 [claude.ai speed sprint](https://claude.dev/blog/how-we-made-claude-ai-faster/)
-(3.1x faster core journeys in two weeks, 3,000+ changes, zero rollbacks). ProvenFast
+(3.1x faster core journeys in two weeks; 3,000+ changes and, by Anthropic's account, no customer-facing incident or rollback). ProvenFast
 generalizes that method to any stack.
 
 ## Why it works
@@ -38,8 +41,8 @@ Counts can be gamed. The cheapest way to lower a request or render count is to
 delete the work that keeps the app correct: revalidation, cache invalidation,
 persistence. So ProvenFast pairs every gate with a **counter-check**, such as
 freshness across tabs, durability across a refresh, or convergence to server
-truth. It also splits counts into the work that blocks the user and the work
-that can run in the background.
+truth. It also splits counts at the moment the screen is ready, and proves
+which early work actually blocks the user by delaying it.
 
 In the [worked example](docs/worked-example.md), the same change measured on the
 same machine gave:
@@ -79,16 +82,20 @@ Ask your agent something like:
 - "Add a perf gate to CI for the search endpoint."
 - "Streaming replies drop frames on 120 Hz screens."
 
-The agent then:
+By default the agent does a **lean pass**: the most improvement for the least
+effort and maintenance.
 
-1. detects your harness, OS, and stack, and asks before installing any missing tool;
-2. builds a lab benchmark for the journey;
-3. validates a deterministic proxy against wall clock;
-4. profiles, fixes, and proves output equivalence;
-5. reports before/after medians and locks in the win.
+1. It picks the slow interaction users hit most and times it.
+2. It profiles that interaction and fixes the dominant cost with the tools you already have.
+3. It checks what the change could break: tests, and freshness and persistence when caching or saving is involved.
+4. It stops when your target is met and lists what is left, with an estimated gain for each.
 
-Agents tend to settle for small wins and to quote effort in human working days.
-These prompts help:
+Deterministic gates, CI ratchets, frame stepping, and parallel threads are
+**deep mode**, and run only when you ask: "set up a perf gate", "run a full
+performance sprint on these journeys".
+
+In deep mode, agents tend to settle for small wins and to quote effort in human
+working days. These prompts help:
 
 - "Before changing anything, find a way to measure this and prove the measurement tracks what users feel."
 - "The targets are not the stopping point. What's next?"
@@ -104,7 +111,7 @@ skills/provenfast/
 ├── references/
 │   ├── tools-by-os.md       Linux / macOS / Windows / WSL tool matrix and install commands
 │   ├── stacks.md            web, Electron, Node, Python, Go, Rust/C++, JVM, .NET, mobile, DBs, CI, agent workflows
-│   ├── browser.md           in-page counters, blocking vs background requests, cache freshness tests, frame stepping
+│   ├── browser.md           in-page counters, requests before/after ready, blocking-delay test, cache freshness tests, frame stepping
 │   └── field-lessons.md     every claim in the sprint write-up, its critics, and a verdict on what holds up
 └── scripts/
     ├── doctor.sh / .ps1     detect OS, stack, tools; print install commands (never installs)
@@ -131,7 +138,7 @@ skills/provenfast/scripts/instr-count.sh -- node --predictable examples/resolve-
 The method is distilled from Anthropic's write-up,
 [How we made claude.ai faster](https://claude.dev/blog/how-we-made-claude-ai-faster/#an-8-millisecond-budget).
 [Theo Browne's video review](https://www.youtube.com/watch?v=FsDUOUV9Vs8&t=3289s) of that write-up shaped the counter-checks,
-the blocking vs background split, and the freshness tests. A transcript of the
+the split of work before and after ready, and the freshness tests. A transcript of the
 video is in [`artifacts/theo's_rant.md`](artifacts/theo's_rant.md). ProvenFast
 tests his claims instead of taking them on trust:
 `skills/provenfast/references/field-lessons.md` records which ones it adopts,

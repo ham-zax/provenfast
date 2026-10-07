@@ -7,7 +7,7 @@ project's existing harness first if it has one.
 ## Web / browser apps (React, Vue, Svelte, Angular, plain DOM)
 
 - **Truth:** Navigation and Resource Timing, `performance.mark/measure` around the journey, Web Vitals (LCP, INP, CLS), real user monitoring split by platform and product. Lab runs with Playwright or Puppeteer, repeated 10+ times and reported as the median.
-- **Gate:** render commits per interaction, style recalcs, layouts, DOM mutations, layout shifts by region, long animation frames, network requests and bytes split into blocking and background, JS heap. Measure payload bytes on a typical and a worst-case fixture. See `browser.md` for the snippets. CDP `Performance.getMetrics` returns `RecalcStyleCount`, `LayoutCount`, `Nodes`, `JSEventListeners`, `ScriptDuration`, and `TaskDuration`.
+- **Gate:** render commits per interaction, style recalcs, layouts, DOM mutations, layout shifts by region, long animation frames, network requests and bytes split at the ready mark, JS heap. Measure payload bytes on a typical and a worst-case fixture. See `browser.md` for the snippets. CDP `Performance.getMetrics` returns `RecalcStyleCount`, `LayoutCount`, `Nodes`, `JSEventListeners`, `ScriptDuration`, and `TaskDuration`.
 - **Explain:** DevTools Performance panel, React Profiler, `chrome://tracing`, coverage of unused JS and CSS.
 - **Typical wins:**
   - a static shell before hydration, generated from the real component;
