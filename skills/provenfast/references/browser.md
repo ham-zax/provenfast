@@ -151,6 +151,7 @@ do not depend on machine speed:
 
 1. Launch with `--deterministic-mode` (or `--enable-begin-frame-control --run-all-compositor-stages-before-draw`) in headless mode.
 2. For each frame, call CDP `HeadlessExperimental.beginFrame({ frameTimeTicks, interval: 8.333 })` for 120 Hz, or 16.667 for 60 Hz, advancing `frameTimeTicks` by the interval.
+   Verify the rig before trusting it: keep a `requestAnimationFrame` loop running in the page and check that N `beginFrame` calls produce exactly N callbacks. The sprint's rig produced 240 frames from 240 begin frames at 8.33 ms. Headless Chromium ticks at 60 Hz by default, so confirm the rate you asked for is the rate you got.
 3. Around each frame, read the main-thread task time (tracing or `Performance.getMetrics` `TaskDuration` delta). Flag frames whose work exceeds the budget.
 4. Gate on **total main-thread blocking** and the **worst frame** over a long fixture, such as a long streamed reply or a big table render.
 

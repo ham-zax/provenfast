@@ -66,6 +66,7 @@ Rules:
 - **Pair every gate with a counter-check.** A count rewards deleting work, including the work that keeps the app correct: revalidation, cache invalidation, persistence, retries, syncing. Before removing a request, write, or render, prove it is redundant (a named invariant already guarantees its result). Add a check that fails if it wasn't: freshness after a change made elsewhere, durability across a refresh mid-action, convergence to server truth. Fewer requests with stale data on screen is a regression, not a win.
 - **Count the critical path separately.** Split each count at the journey's end mark into *blocking* (before) and *background* (after). Optimize blocking work first, usually by reordering: fetch what the first interaction needs first, then keep data fresh in the background. Background work still costs battery, data, and server load, but remove it only with the redundancy proof above.
 - **Ratchet absolute counts per journey, never global ratios.** Coverage percentages and averages can block deleting dead code. Deleting code should only ever lower a count.
+- **Count events, not scores.** A summed or averaged score can pass while users see a problem. Each sidebar shift in the sprint scored about 0.008 CLS, well inside the 0.1 "good" threshold, yet the page felt janky. Attribute raw entries (each layout shift, each long frame) to named regions, and fail on any where none is expected.
 - **Several cheap counters beat one perfect one.** Each new instrument tends to expose new targets. In the sprint, about a third of the PRs added telemetry or a guardrail.
 
 ## 3. Measurement protocol
@@ -92,7 +93,7 @@ Write every gate into a single flat `metrics.json` (`{"journey.metric": number}`
 
 ### Frame budget (smoothness)
 
-For streaming, scrolling, and animation, use the frame budget: 16.67 ms per frame at 60 Hz and 8.33 ms at 120 Hz. Add an FPS readout computed from `requestAnimationFrame` timestamps. In CI, drive headless Chromium with deterministic frame stepping (CDP `HeadlessExperimental.beginFrame`) and step through the worst case frame by frame. Gate on **total main-thread blocking time** and **worst single frame**, not average FPS. In the sprint, stepping a long streamed reply frame by frame cut its main-thread blocking from over 750 ms to 200 ms and its CPU to a third, and it held 120 FPS. The method: remove work that grows with message length on each chunk, memoize finished blocks, and move growing-code-fence tokenization to a worker. The 120 Hz rig then became a nightly job.
+For streaming, scrolling, and animation, use the frame budget: 16.67 ms per frame at 60 Hz and 8.33 ms at 120 Hz. Add an FPS readout computed from `requestAnimationFrame` timestamps. In CI, drive headless Chromium with deterministic frame stepping (CDP `HeadlessExperimental.beginFrame`) and step through the worst case frame by frame. Verify the rig first: N begin frames must produce exactly N frames (the sprint's 120 Hz rig produced 240 frames from 240 begin frames at 8.33 ms). Gate on **total main-thread blocking time** and **worst single frame**, not average FPS. In the sprint, stepping a long streamed reply frame by frame cut its main-thread blocking from over 750 ms to 200 ms and its CPU to a third, and it held 120 FPS. The method: remove work that grows with message length on each chunk, memoize finished blocks, and move growing-code-fence tokenization to a worker. The 120 Hz rig then became a nightly job.
 
 ## 4. Hunting: where the time actually goes
 
@@ -104,8 +105,9 @@ Run a **census** before you guess. Each census below found a large, invisible co
 - **Idle profiling:** profile while the user does nothing. One idle tab cloned cache snapshots into IndexedDB twice a minute on the main thread.
 - **Data-flow census:** count fetches, cache reads and writes, and renders per journey. Repeated work, such as the same ID resolved three times, often traces back to one data-loading pattern that also triggers extra renders.
 - **Encoding and representation:** one non-ASCII character (an em dash, a curly quote) can turn a whole string into two-byte UTF-16 and push every regex onto a slower path. Copying code blocks to a one-byte string before highlighting cut a 1.0 s freeze to 0.35 s.
-- **Re-check against the budget after a micro-fix.** 0.35 s is still about 40 frames at 120 Hz. If the work is still over budget, ask whether it belongs on that thread at all. A worker or WASM module, lazy-loaded, takes it off the main thread entirely. Count the costs: bundle size, message passing, ordering, and cancellation.
+- **Re-check against the budget after a micro-fix.** 0.35 s is still about 40 frames at 120 Hz. If the work is still over budget, ask whether it belongs on that thread at all. A worker or WASM module, lazy-loaded, takes it off the main thread entirely. Memoize its results per finished block on the calling side, so each new chunk does not re-run it over everything. Count the costs: bundle size, message passing, ordering, and cancellation.
 - **Style, paint, and GPU:** CPU profiles miss these costs. Count style recalcs and layouts via CDP, and use the DevTools Rendering panel (paint flashing, layout-shift regions, layer borders).
+- **Costs in a dependency.** When the profile points into a library, runtime, or browser, the fix may belong upstream; the sprint landed changes in Electron, Chromium, and Node. Ship a local workaround that links the upstream issue, and remove it once the fix is released.
 
 ### Pattern catalogue
 
@@ -117,7 +119,7 @@ Each fix below gives the same output with less work. Prove that with an equivale
 | Plain objects used as dictionaries over many shapes (megamorphic lookups) | `Map`, or a stable shape; resolve once |
 | Expensive regex/parse on every line | cheap first-character or length prefilter, then the full check |
 | O(total length) work per streamed chunk | memoize finished blocks; only process the growing tail |
-| Heavy work on the UI/main/request thread | move it to a worker, thread pool, or background job; keep a fallback |
+| Heavy work on the UI/main/request thread | move it to a worker, thread pool, or background job; memoize results per finished unit; keep a fallback |
 | Big layout/paint in one frame | split it across frames (cell by cell, row by row) to fit the budget |
 | Interactive UI waits for framework boot | ship a static shell rendered from the same component, then hydrate over it; test the handoff |
 | Recompiling the same code every start | bytecode or code cache, snapshot, AOT, persistent compile cache |
@@ -128,6 +130,7 @@ Each fix below gives the same output with less work. Prove that with an equivale
 | N+1 queries or round trips | batch, join, or preload; gate on query count |
 | Re-render storms | narrow subscriptions, stable props, selector memoization; gate on commit count |
 | Late content moving the layout | reserve space, pin layout, gate on layout shifts per region; allow movement only where reconciliation changed the data |
+| Regions shown together resolve at different times | load them from the same cache or request, or hold the group and reveal it together; measure when the *last* one is usable |
 
 ## 5. Guardrails: what makes bold changes safe
 
@@ -145,10 +148,10 @@ Each fix below gives the same output with less work. Prove that with an equivale
   - cold, warm, and stale caches;
   - slow and offline networks;
   - the worst-case fixture.
-- **Make human testing one step.** Provide a preview URL per PR, or a PR label that builds the desktop artifact. If trying a change takes 20 minutes, nobody feels it before users do. The owner should use the change before rollout.
+- **Make human testing one step.** Provide a preview URL per PR, or a PR label that builds the desktop artifact. If trying a change takes 20 minutes, nobody feels it before users do. When several fixes are plausible, build each as a demo the owner can try. The owner should use the change before rollout.
 - **Auto-merge only what gates cover.** Visual, animation, and interaction changes need a human to look at a before/after recording, because no count covers them.
 - **Flags for anything user-perceptible.** Roll out to the team, then to 1% of users, then to everyone. Classify each flag as a *kill switch* or a *ramp*, give it an owner and a removal date, keep all flags in one list, and retire them. The sprint created about 200 and retired more than half before it ended.
-- **Review.** Every change gets automated review plus at least one human approval when the project has humans in the loop. Show user-visible changes as before/after recordings.
+- **Review.** Every change gets automated review plus at least one human approval when the project has humans in the loop. Show user-visible changes as before/after recordings. Reviewers read each change's stated mechanism and counter-checks, not just its numbers, and turn each doubt into a test the agent must pass (`references/field-lessons.md` D7).
 - **Lab checks vs committed tests.** Generate as many throwaway checks as help you prove a change. Commit only the ones that guard a real invariant, within the repo's test budget.
 - **Ratchet everything you won.**
   - `scripts/ratchet.mjs check` runs in CI or nightly.
@@ -161,10 +164,12 @@ Each fix below gives the same output with less work. Prove that with an equivale
 - Run one journey or benchmark per thread or worker, and scale by opening more threads. The sprint ran 150+ in parallel.
 - Each thread has a named owner who supplies **taste**: which trade-offs are acceptable. The agent's job is to measure each option's cost (for example, a word-by-word fade's share of the frame budget) and build two or three variants. The owner chooses. Use data where it exists: pick a skeleton delay from the measured load-time distribution so the skeleton never flashes for a frame or two. Holding content back until it is complete makes rendering cheaper but delays the first thing users see, so that is a taste call, not a rule.
 - A coordinator supplies **direction**: sequencing, deduplication, merging threads that step on each other, and closing threads at diminishing returns.
-- Supply **ambition**: agents default to small scope.
+- Supply **ambition**: agents default to small scope. Push for boldness only once the guardrails in section 5 are in place; the sprint asked for it because it trusted them.
   - Treat targets as starting points: "the targets are not the stopping point; what's next?"
   - When wins plateau, propose three options, from incremental to radical (a cache layer, a worker or process boundary, a new data model, a different runtime). Give each an estimated time saved, its complexity, and the benchmark that would prove it. Implement the one the owner picks.
+  - A standing instruction beats repeated nudges, for example in `AGENTS.md` or `CLAUDE.md`: "If I state the outcome, keep going and hill climb until you get there." Repo rules on scope and approval still win.
 - **Estimate impact in milliseconds, not effort in days.** Agents estimate effort in human working days and overshoot badly. Within the authorized scope, do the work now instead of scheduling it.
+- Where possible, run agent-driven browsers and wall-clock benchmarks on a separate machine, VM, or container, so the user's activity stays out of the numbers and the agent stays off their screen.
 - On a single machine, keep heavy measurements serial. Parallel benchmarks corrupt each other's wall clock. Deterministic counts are safer to parallelize.
 
 ## 7. When to stop

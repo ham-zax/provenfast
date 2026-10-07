@@ -90,6 +90,7 @@ The agent then:
 Agents tend to settle for small wins and to quote effort in human working days.
 These prompts help:
 
+- "Before changing anything, find a way to measure this and prove the measurement tracks what users feel."
 - "The targets are not the stopping point. What's next?"
 - "Give me three proposals, from incremental to radical, each with estimated ms saved, complexity, and the benchmark that proves it."
 - "Estimate impact in milliseconds, not effort in days."
